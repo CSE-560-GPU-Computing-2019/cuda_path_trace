@@ -84,7 +84,7 @@ Sphere spheres[] = //Scene: radius, position, emission, color, material
   Sphere(1e5, Vec(50,-1e5+81.6,81.6),Vec(),Vec(.75,.75,.75),DIFF),//Top 
   Sphere(16.5,Vec(27,16.5,47),       Vec(),Vec(1,1,1)*.999, SPEC),//Mirr 
   Sphere(16.5,Vec(73,16.5,78),       Vec(),Vec(1,1,1)*.999, REFR),//Glas 
-  Sphere(600, Vec(50,681.6-.27,81.6),Vec(12,12,12),  Vec(), DIFF) //Lite 
+  Sphere(600, Vec(50,681.6-.27,81.6),Vec(12,12,12),  Vec(0.9,0,0), DIFF) //Lite 
 }; 
 inline double clamp(double x)
 { 
