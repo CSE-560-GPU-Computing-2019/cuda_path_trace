@@ -172,3 +172,4 @@ int main(int argc, char *argv[]){
   for (int i=0; i<w*h; i++) 
     fprintf(f,"%d %d %d ", toInt(c[i].x), toInt(c[i].y), toInt(c[i].z)); 
 } 
+/* The Path tracing code has been taken from : http://raytracey.blogspot.com/2015/10/gpu-path-tracing-tutorial-1-drawing.html */
