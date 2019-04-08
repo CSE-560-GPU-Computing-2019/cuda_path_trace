@@ -2,9 +2,10 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <vector_types.h>
-#include "device_launch_parameters.h"
+//#include "device_launch_parameters.h"
 #include <helper_math.h>
 #include <stdlib.h>
+#include <curand.h>
 
 #define NumThreadsX 16
 #define NumThreadsY 16
@@ -21,6 +22,7 @@ __constant__ float3 black={0.0f,0.0f,0.0f};
 __constant__ float3 Xaxis={1.0,0.0,0.0};
 __constant__ float3 Yaxis={0.0,1.0,0.0};
 __constant__ float3 OriginInit={50, 52, 295.6};
+__constant__ float3 DirInitRaw={0, -0.042612, -1};
 __constant__ float FoV=0.5135;
  
 inline float clamp(float x)
@@ -33,9 +35,9 @@ inline int RGBtoInt(float x)
 	return int(pow(clamp(x), 1 / 2.2) * 255 + 0.5); 
 }
 
-__device__ static float RandGen(unsigned int *seed0, unsigned int *seed1) 
+__device__ static float RandGen() 
 {
-	*seed0 = 36969 * ((*seed0) & 65535) + ((*seed0) >> 16);
+	*seed0 = 36969 * ((*seed0) & 65535) + ((*seed0) >> 16);  // hash the seeds using bitwise AND and bitshifts
 	*seed1 = 18000 * ((*seed1) & 65535) + ((*seed1) >> 16);
 
 	unsigned int ires = ((*seed0) << 16) + (*seed1);	
@@ -47,7 +49,7 @@ __device__ static float RandGen(unsigned int *seed0, unsigned int *seed1)
 
 	res.ui = (ires & 0x007fffff) | 0x40000000;
 
-	return (res.f - 2.f) / 2.f;
+	return (res.f - 2.f) / 2.f;	
 }
 
 
@@ -186,78 +188,73 @@ __device__ float3 GetRadiance(Ray &inRay,unsigned int *seed1,unsigned int *seed2
 {
 	float3 ColourAccumulator = black;
 	float3 mask = white;
-	float ClosestIntersection;
-	int HitID;
+	float ClosestIntersection=0.0;
+	int HitID=0;
 	int LightBounce;
-	//float3 HitPoint;
-	//float3 Normal;
-	//float3 FrontNormal;
-	//float Azimuth;
-	//float Elevation;
-	//float SqrtElev;
-	//float3 u,v,w;
-	//float3 NewDir;
-	//float3 UpdateMask;
-
-	for (LightBounce = 0; LightBounce < 4; ++LightBounce)
-	{
-		ClosestIntersection=0.0;
-		HitID=0;
-
-		if (!DoesRayIntersectScene(inRay,ClosestIntersection,HitID))
+	if (!DoesRayIntersectScene(inRay,ClosestIntersection,HitID))
 			return black;
+
+	const Sphere &HitObj=spheres[HitID];
+	float3 HitPoint=inRay.Origin+inRay.Direction*ClosestIntersection;
+	float3 Normal=normalize(HitPoint-HitObj.Position);
+	float3 FrontNormal=dot(Normal,inRay.Direction)<0 ? Normal : Normal*(-1); 
+
+	if (HitObj.Reflector==DIFF)
+		for (LightBounce = 0; LightBounce < 4; ++LightBounce)		
+		{
+			float Azimuth = 2 * M_PI * RandGen(seed1, seed2);
+			float Elevation = RandGen(seed1, seed2);
+			float SqrtElev = sqrtf(Elevation); 
+			float3 w = FrontNormal; 
+			float3 u = normalize(cross((fabs(w.x) > 0.1 ? Yaxis : Xaxis), w));
+			float3 v = cross(w,u);		
+			float3 NewDir=normalize(u*cos(Azimuth)*SqrtElev + v*sin(Azimuth)*SqrtElev + w*sqrtf(1 - Elevation));																	
+
+			inRay.Origin=HitPoint + FrontNormal*0.05f;
+			inRay.Direction=NewDir;
+			float3 UpdateMask=2*HitObj.Colour*dot(NewDir,FrontNormal);
+			mask*=UpdateMask;
+			ColourAccumulator+=mask*HitObj.Emmisivity;//*100;
+			
+		}
+	else if (HitObj.Reflector==SPEC)
+		for (LightBounce = 0; LightBounce < 4; ++LightBounce)		
+		{
+			r.d-n*2*n.dot(r.d)	//new direction
+			float3 UpdateMask=HitObj.Colour*(inRay.Direction-dot(Normal*Normal*2,inRay.Direction));
+			mask*=UpdateMask;
+			ColourAccumulator+=mask*HitObj.Emmisivity;//*100;
+		}
 		
-		const Sphere &HitObj=spheres[HitID];
-		float3 HitPoint=inRay.Origin+inRay.Direction*ClosestIntersection;
-		float3 Normal=normalize(HitPoint-HitObj.Position);
-		float3 FrontNormal=dot(Normal,inRay.Direction)<0 ? Normal : Normal*(-1); 
-
-		ColourAccumulator+=mask*HitObj.Emmisivity*100;
-
-		float Azimuth = 2 * M_PI * RandGen(seed1, seed2);
-		float Elevation = RandGen(seed1, seed2);
-		float SqrtElev = sqrtf(Elevation); 
-		float3 w = FrontNormal; 
-		float3 u = normalize(cross((fabs(w.x) > 0.1 ? Yaxis : Xaxis), w));
-		float3 v = cross(w,u);		
-
-		float3 NewDir=normalize(u*cos(Azimuth)*SqrtElev + v*sin(Azimuth)*SqrtElev + w*sqrtf(1 - Elevation));																	
-
-		inRay.Origin=HitPoint + FrontNormal*0.05f;
-		inRay.Direction=NewDir;
-		float3 UpdateMask=2*HitObj.Colour*dot(NewDir,FrontNormal);
-		mask*=UpdateMask;
-	}
+		
+	
 
 	return ColourAccumulator;
 }
 
-__global__ void TracePath(float3 *RenderedImage)
+__global__ void TracePath2(float3 *RenderedImage)
 {
 	unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;   
 	unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
-
 	unsigned int CurrentPixel = (RenderHeight - y - 1)*RenderWidth + x; 
+
 	unsigned int seed1 = x;
 	unsigned int seed2 = y;
-	int CurrentSample;
-	float3 DirectionOffset;
-	float3 DirectionInit=normalize(make_float3(0, -0.042612, -1));
-
-	Ray CameraRay(OriginInit,DirectionInit);
-	float3 DirOffsetX = make_float3(RenderWidth * FoV / RenderHeight, 0.0f, 0.0f);
+	
+	Ray CameraRay(OriginInit,normalize(DirInitRaw));
+	float3 DirOffsetX=make_float3(RenderWidth*FoV/RenderHeight,0.0f,0.0f);
 	float3 DirOffsetY = normalize(cross(DirOffsetX, CameraRay.Direction)) * FoV;
 	float3 FinalPixCol = black;
 
-	for (CurrentSample = 0; CurrentSample < NumSamples; CurrentSample++)
-	{		
-		DirectionOffset= CameraRay.Direction + DirOffsetX*((0.25 + x) / RenderWidth - 0.5) + DirOffsetY*((0.25 + y) / RenderHeight - 0.5);		
-		Ray temp_ray(CameraRay.Origin + DirectionOffset * 40,normalize(DirectionOffset));		
+	for (int CurrentSample = 0; CurrentSample < NumSamples; CurrentSample++)
+	{
+		unsigned int depth=0;
+		float3 DirectionOffset = CameraRay.Direction + DirOffsetX*((0.25 + x) / RenderWidth - 0.5) + DirOffsetY*((0.25 + y) / RenderHeight - 0.5);		
+		Ray temp_ray(CameraRay.Origin + DirectionOffset * 40, normalize(DirectionOffset));		
 		FinalPixCol+=GetRadiance(temp_ray, &seed1, &seed2)*(1.0 / NumSamples); 
 	}
 
-	RenderedImage[CurrentPixel] = make_float3(clamp(FinalPixCol.x, 0.0f, 1.0f), clamp(FinalPixCol.y, 0.0f, 1.0f), clamp(FinalPixCol.z, 0.0f, 1.0f));
-	
+	RenderedImage[CurrentPixel]=make_float3(clamp(FinalPixCol.x, 0.0f, 1.0f), clamp(FinalPixCol.y, 0.0f, 1.0f), clamp(FinalPixCol.z, 0.0f, 1.0f));
 }
 
 int main(int argc, char const *argv[])
@@ -272,7 +269,7 @@ int main(int argc, char const *argv[])
 	dim3 grid(RenderWidth / NumThreadsX, RenderHeight / NumThreadsY, NumThreadsZ);
 
 	printf("Starting Path Trace Kernel\n");
-	TracePath<<< grid, block >>>(d_RenderedImage);	
+	TracePath2 <<< grid,block>>> (d_RenderedImage);	
 	cudaMemcpy(h_RenderedImage, d_RenderedImage, RenderWidth * RenderHeight *sizeof(float3), cudaMemcpyDeviceToHost);  	
 	cudaFree(d_RenderedImage);  
 	printf("Finished and freed\n");
