@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <vector_types.h>
-//#include "device_launch_parameters.h"
 #include <helper_math.h>
 #include <stdlib.h>
 #include <curand.h>
@@ -12,7 +11,7 @@
 #define NumThreadsZ 1
 #define RenderWidth 1920
 #define RenderHeight 1080
-#define NumSamples 50000
+#define NumSamples 5000
 #define InfinityBound 1e20
 
 using namespace std;
@@ -35,7 +34,7 @@ inline int RGBtoInt(float x)
 	return int(pow(clamp(x), 1 / 2.2) * 255 + 0.5); 
 }
 
-__device__ static float RandGen() 
+__device__ static float RandGen(unsigned int *seed0, unsigned int *seed1) 
 {
 	*seed0 = 36969 * ((*seed0) & 65535) + ((*seed0) >> 16);  // hash the seeds using bitwise AND and bitshifts
 	*seed1 = 18000 * ((*seed1) & 65535) + ((*seed1) >> 16);
@@ -146,7 +145,7 @@ __constant__ Sphere spheres[]=
 	// small sphere 1
 	{ 16.5f,
 		{ 27.0f, 16.5f, 47.0f },
-		{ 0.0f, 0.0f, 0.0f },
+		{ 12.0f, 12.4f, 12.2f },
 		{ 0.999f, 0.999f, 0.999f},
 		REFR
 	}, 
@@ -167,11 +166,11 @@ __constant__ Sphere spheres[]=
 
 };
 
-__device__ inline bool DoesRayIntersectScene(const Ray &inRay, float &t, int &HitID)
+__device__ inline bool DoesRayIntersectScene(const Ray &inRay, float &ClosestIntersection, int &HitID)
 {
 	int i;
 	float SceneBlock=sizeof(spheres)/sizeof(Sphere);
-	float ClosestIntersection=InfinityBound;
+	ClosestIntersection=InfinityBound;
 	float NewClosestIntersection;
 	for (i = int(SceneBlock); i--; )		
 		if ((NewClosestIntersection=spheres[i].SphereCollisionPoint(inRay)) && NewClosestIntersection<ClosestIntersection)
@@ -180,51 +179,57 @@ __device__ inline bool DoesRayIntersectScene(const Ray &inRay, float &t, int &Hi
 			HitID=i;
 		}
 	
-	return t<InfinityBound;
+	return ClosestIntersection<InfinityBound;
 		
 }
 
 __device__ float3 GetRadiance(Ray &inRay,unsigned int *seed1,unsigned int *seed2)
 {
+
 	float3 ColourAccumulator = black;
 	float3 mask = white;
-	float ClosestIntersection=0.0;
-	int HitID=0;
+	
 	int LightBounce;
-	if (!DoesRayIntersectScene(inRay,ClosestIntersection,HitID))
-			return black;
+	//int HitID;
+	
+	for (LightBounce = 0; LightBounce < 4; ++LightBounce)		
+	{
+		float ClosestIntersection;
+		int HitID=0;
+		
+		if (!DoesRayIntersectScene(inRay,ClosestIntersection,HitID))
+				return black;
 
-	const Sphere &HitObj=spheres[HitID];
-	float3 HitPoint=inRay.Origin+inRay.Direction*ClosestIntersection;
-	float3 Normal=normalize(HitPoint-HitObj.Position);
-	float3 FrontNormal=dot(Normal,inRay.Direction)<0 ? Normal : Normal*(-1); 
+		const Sphere &HitObj=spheres[HitID];
+		float3 HitPoint=inRay.Origin+inRay.Direction*ClosestIntersection;
+		float3 Normal=normalize(HitPoint-HitObj.Position);
+		float3 FrontNormal=dot(Normal,inRay.Direction)<0 ? Normal : Normal*(-1); 
 
-	if (HitObj.Reflector==DIFF)
-		for (LightBounce = 0; LightBounce < 4; ++LightBounce)		
-		{
-			float Azimuth = 2 * M_PI * RandGen(seed1, seed2);
-			float Elevation = RandGen(seed1, seed2);
-			float SqrtElev = sqrtf(Elevation); 
-			float3 w = FrontNormal; 
-			float3 u = normalize(cross((fabs(w.x) > 0.1 ? Yaxis : Xaxis), w));
-			float3 v = cross(w,u);		
-			float3 NewDir=normalize(u*cos(Azimuth)*SqrtElev + v*sin(Azimuth)*SqrtElev + w*sqrtf(1 - Elevation));																	
+		ColourAccumulator+=mask*HitObj.Emmisivity*HitObj.Colour;
 
-			inRay.Origin=HitPoint + FrontNormal*0.05f;
-			inRay.Direction=NewDir;
-			float3 UpdateMask=2*HitObj.Colour*dot(NewDir,FrontNormal);
-			mask*=UpdateMask;
-			ColourAccumulator+=mask*HitObj.Emmisivity;//*100;
-			
-		}
-	else if (HitObj.Reflector==SPEC)
+		float Azimuth = 2 * M_PI * RandGen(seed1, seed2);
+		float Elevation = RandGen(seed1, seed2);
+		float SqrtElev = sqrtf(Elevation); 
+		float3 w = FrontNormal; 
+		float3 u = normalize(cross((fabs(w.x) > 0.1 ? Yaxis : Xaxis), w));
+		float3 v = cross(w,u);		
+		float3 NewDir=normalize(u*cos(Azimuth)*SqrtElev + v*sin(Azimuth)*SqrtElev + w*sqrtf(1 - Elevation));																	
+
+		inRay.Origin=HitPoint + FrontNormal*0.05f;
+		inRay.Direction=NewDir;
+		float3 UpdateMask=2*HitObj.Colour*dot(NewDir,FrontNormal);
+		mask *= UpdateMask; 
+		//*100;
+		
+	}
+	/*else if (HitObj.Reflector==SPEC)
 		for (LightBounce = 0; LightBounce < 4; ++LightBounce)		
 		{
 			r.d-n*2*n.dot(r.d)	//new direction
 			float3 UpdateMask=HitObj.Colour*(inRay.Direction-dot(Normal*Normal*2,inRay.Direction));
 			mask*=UpdateMask;
 			ColourAccumulator+=mask*HitObj.Emmisivity;//*100;
-		}
+		}*/
 		
 		
 	
@@ -247,8 +252,7 @@ __global__ void TracePath2(float3 *RenderedImage)
 	float3 FinalPixCol = black;
 
 	for (int CurrentSample = 0; CurrentSample < NumSamples; CurrentSample++)
-	{
-		unsigned int depth=0;
+	{		
 		float3 DirectionOffset = CameraRay.Direction + DirOffsetX*((0.25 + x) / RenderWidth - 0.5) + DirOffsetY*((0.25 + y) / RenderHeight - 0.5);		
 		Ray temp_ray(CameraRay.Origin + DirectionOffset * 40, normalize(DirectionOffset));		
 		FinalPixCol+=GetRadiance(temp_ray, &seed1, &seed2)*(1.0 / NumSamples); 
@@ -262,6 +266,8 @@ int main(int argc, char const *argv[])
 	float3* h_RenderedImage = new float3[RenderWidth*RenderHeight*sizeof(float3)]; 
 	float3* d_RenderedImage;    
 	int PixPtr;	
+
+	
 
 	cudaMalloc(&d_RenderedImage, RenderWidth * RenderHeight * sizeof(float3));
 	
