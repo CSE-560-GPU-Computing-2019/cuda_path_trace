@@ -1,17 +1,13 @@
 #include <iostream>
 #include <stdio.h>
 #include <cuda_runtime.h>
-//#include <vector_types.h>
 #include <helper_math.h>
 #include <stdlib.h>
-//#include <curand.h>
 
-#define NumThreadsX 16
-#define NumThreadsY 16
 #define NumThreadsZ 1
 #define RenderWidth 1920
 #define RenderHeight 1080
-#define SamplesPerPixel 5000
+//#define SamplesPerPixel 5000
 #define InfinityBound 1e20
 
 using namespace std;
@@ -148,15 +144,15 @@ __constant__ Sphere spheres[]=
 	// small sphere 1
 	{ 16.5f,
 		{ 27.0f, 16.5f, 47.0f },
-		{ 12.0f, 12.4f, 12.2f },
-		{ 0.999f, 0.999f, 0.999f},
+		{ 0.0f, 0.4f, 0.2f },
+		{ 0.083f, 0.19f, 0.032f},
 		REFR
 	}, 
 	// small sphere 2
 	{ 16.5f,
 		{ 73.0f, 16.5f, 78.0f },
 		{ 0.0f, 0.0f, 0.0f },
-		{ 0.999f, 0.999f, 0.999f },
+		{ 0.673f, 0.239f, 0.459f },
 		SPEC 
 	}, 
 	// Light
@@ -205,51 +201,44 @@ __device__ float3 GetRadiance(Ray &inRay,unsigned int *seed1,unsigned int *seed2
 				return black;
 
 		const Sphere &HitObj=spheres[HitID];
+
+		float3 HitPoint=inRay.Origin+inRay.Direction*ClosestIntersection;
+		float3 Normal=normalize(HitPoint-HitObj.Position);
+		float3 FrontNormal=dot(Normal,inRay.Direction)<0 ? Normal : Normal*(-1); 
+		
+		ColourAccumulator+=mask*HitObj.Emmisivity;
+		
+		float Azimuth = 2 * M_PI * RandGen(seed1, seed2);
+		float Elevation = RandGen(seed1, seed2);
+		float SqrtElev = sqrtf(Elevation); 
+
+		float3 u = normalize(cross((fabs(FrontNormal.x) > 0.1 ? Yaxis : Xaxis), FrontNormal));
+		float3 v = cross(FrontNormal,u);		
+		float3 NewDir=normalize(u*cos(Azimuth)*SqrtElev + v*sin(Azimuth)*SqrtElev + FrontNormal*sqrtf(1 - Elevation));																	
+
+		inRay.Origin=HitPoint + FrontNormal*0.05f;
+		inRay.Direction=NewDir;
+		float3 UpdateMask;
 		if (HitObj.Reflector==SPEC)		
 		{
 			
-			float3 HitPoint=inRay.Origin+inRay.Direction*ClosestIntersection;
-			float3 Normal=normalize(HitPoint-HitObj.Position);
-			float3 FrontNormal=dot(Normal,inRay.Direction)<0 ? Normal : Normal*(-1); 
+			UpdateMask=2*HitObj.Colour*dot(inRay.Direction-Normal*2*dot(Normal,inRay.Direction),inRay.Direction);
 
-			ColourAccumulator+=mask*HitObj.Emmisivity;//*HitObj.Colour;
-
-			float Azimuth = 2 * M_PI * RandGen(seed1, seed2);
-			float Elevation = RandGen(seed1, seed2);
-			float SqrtElev = sqrtf(Elevation); 
-			float3 w = FrontNormal; 
-			float3 u = normalize(cross((fabs(w.x) > 0.1 ? Yaxis : Xaxis), w));
-			float3 v = cross(w,u);		
-			float3 NewDir=normalize(u*cos(Azimuth)*SqrtElev + v*sin(Azimuth)*SqrtElev + w*sqrtf(1 - Elevation));																	
-
-			inRay.Origin=HitPoint + FrontNormal*0.05f;
-			inRay.Direction=NewDir;
-			float3 UpdateMask=2*HitObj.Colour*dot(inRay.Direction-Normal*2*dot(Normal,inRay.Direction),inRay.Direction);
-			mask *= UpdateMask; 		
+			
+			
+		}
+		else if(HitObj.Reflector==DIFF)
+		{
+			
+			UpdateMask=2*HitObj.Colour*dot(NewDir,FrontNormal);
 			
 		}
 		else
 		{
-			float3 HitPoint=inRay.Origin+inRay.Direction*ClosestIntersection;
-			float3 Normal=normalize(HitPoint-HitObj.Position);
-			float3 FrontNormal=dot(Normal,inRay.Direction)<0 ? Normal : Normal*(-1); 
-
-			ColourAccumulator+=mask*HitObj.Emmisivity;//*HitObj.Colour;
-
-			float Azimuth = 2 * M_PI * RandGen(seed1, seed2);
-			float Elevation = RandGen(seed1, seed2);
-			float SqrtElev = sqrtf(Elevation); 
-			float3 w = FrontNormal; 
-			float3 u = normalize(cross((fabs(w.x) > 0.1 ? Yaxis : Xaxis), w));
-			float3 v = cross(w,u);		
-			float3 NewDir=normalize(u*cos(Azimuth)*SqrtElev + v*sin(Azimuth)*SqrtElev + w*sqrtf(1 - Elevation));																	
-
-			inRay.Origin=HitPoint + FrontNormal*0.05f;
-			inRay.Direction=NewDir;
-			float3 UpdateMask=2*HitObj.Colour*dot(NewDir,FrontNormal);
-			mask *= UpdateMask; 		
+			UpdateMask=2*HitObj.Colour*HitObj.Colour*HitObj.Colour*dot(inRay.Direction-2*Normal*dot(FrontNormal,inRay.Direction),inRay.Direction);
 		}
 		
+		mask *= UpdateMask; 		
 		
 		
 	}
@@ -260,7 +249,7 @@ __device__ float3 GetRadiance(Ray &inRay,unsigned int *seed1,unsigned int *seed2
 	return ColourAccumulator;
 }
 
-__global__ void TracePath2(float3 *RenderedImage)
+__global__ void TracePath2(float3 *RenderedImage,const int SamplesPerPixel)
 {
 	unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;   
 	unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
@@ -286,11 +275,14 @@ __global__ void TracePath2(float3 *RenderedImage)
 
 int main(int argc, char const *argv[])
 {
-	float3* h_RenderedImage = new float3[RenderWidth*RenderHeight*sizeof(float3)]; 
-	float3* d_RenderedImage;    
 	int PixPtr;	
-
+	char* endPtr;
 	
+	int NumThreadsX=strtol(argv[1],&endPtr,10);
+	int NumThreadsY=NumThreadsX;
+	int SamplesPerPixel=strtol(argv[2],&endPtr,10);
+	float3* h_RenderedImage = new float3[RenderWidth*RenderHeight*sizeof(float3)]; 
+	float3* d_RenderedImage;	
 
 	cudaMalloc(&d_RenderedImage, RenderWidth * RenderHeight * sizeof(float3));
 	
@@ -298,12 +290,12 @@ int main(int argc, char const *argv[])
 	dim3 grid(RenderWidth / NumThreadsX, RenderHeight / NumThreadsY, NumThreadsZ);
 
 	printf("Starting Path Trace Kernel\n");
-	TracePath2 <<< grid,block>>> (d_RenderedImage);	
+	TracePath2 <<< grid,block>>> (d_RenderedImage,SamplesPerPixel);	
 	cudaMemcpy(h_RenderedImage, d_RenderedImage, RenderWidth * RenderHeight *sizeof(float3), cudaMemcpyDeviceToHost);  	
 	cudaFree(d_RenderedImage);  
 	printf("Finished and freed\n");
 
-	FILE *f = fopen("GPU_image.ppm", "w");          
+	FILE *f = fopen(argv[3], "w");          
 	fprintf(f, "P3\n%d %d\n%d\n", RenderWidth, RenderHeight, 255);
 
 	for (PixPtr = 0; PixPtr < RenderWidth*RenderHeight; PixPtr++)  

@@ -1,8 +1,7 @@
 run:	
-#	g++ -fopenmp pt.cpp -o pt_test 
 	nvcc -I headers/ hope_eternal.cu -o path_trace
-	nvprof --system-profiling on -s -f -o profilePT.nvvp ./path_trace
-#	time ./pt_test 5000
+	nvprof --system-profiling on -s -f -o profilePT1.nvvp ./path_trace 16 5000 GPUimage1.ppm
+	nvprof --system-profiling on -s -f -o profilePT2.nvvp ./path_trace 32 5000 GPUimage2.ppm
+
 clean:	
-	rm *.ppm path_trace *.nvvp
-#	rm pt_test
+	rm path_trace *.ppm *.nvvp
