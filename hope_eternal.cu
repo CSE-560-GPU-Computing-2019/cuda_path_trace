@@ -1,21 +1,21 @@
 #include <iostream>
 #include <stdio.h>
 #include <cuda_runtime.h>
-#include <vector_types.h>
+//#include <vector_types.h>
 #include <helper_math.h>
 #include <stdlib.h>
-#include <curand.h>
+//#include <curand.h>
 
 #define NumThreadsX 16
 #define NumThreadsY 16
 #define NumThreadsZ 1
 #define RenderWidth 1920
 #define RenderHeight 1080
-#define NumSamples 5000
+#define SamplesPerPixel 5000
 #define InfinityBound 1e20
 
 using namespace std;
-
+// constants
 __constant__ float3 white={1.0f, 1.0f, 1.0f}; 
 __constant__ float3 black={0.0f,0.0f,0.0f};
 __constant__ float3 Xaxis={1.0,0.0,0.0};
@@ -24,6 +24,7 @@ __constant__ float3 OriginInit={50, 52, 295.6};
 __constant__ float3 DirInitRaw={0, -0.042612, -1};
 __constant__ float FoV=0.5135;
  
+//some utility functions 
 inline float clamp(float x)
 { 
 	return x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x; 
@@ -33,7 +34,7 @@ inline int RGBtoInt(float x)
 { 
 	return int(pow(clamp(x), 1 / 2.2) * 255 + 0.5); 
 }
-
+//random number generator
 __device__ static float RandGen(unsigned int *seed0, unsigned int *seed1) 
 {
 	*seed0 = 36969 * ((*seed0) & 65535) + ((*seed0) >> 16);  // hash the seeds using bitwise AND and bitshifts
@@ -51,14 +52,14 @@ __device__ static float RandGen(unsigned int *seed0, unsigned int *seed1)
 	return (res.f - 2.f) / 2.f;	
 }
 
-
+//Define types of reflections
 enum ReflectionType
 {
 	DIFF,
 	SPEC,
 	REFR
 };
-
+//Ray structure
 struct Ray
 {
 	float3 Origin;
@@ -67,6 +68,7 @@ struct Ray
 	__device__ Ray(float3 orig_init, float3 dir_init) : Origin(orig_init), Direction(dir_init) {} 
 };
 
+//Sphere structure
 struct Sphere
 {
 	float Radius;
@@ -89,7 +91,8 @@ struct Sphere
 
 	}
 };
-/* 
+
+/* Scene definition 
 { float radius,
 	{ float3 position },
 	{ float3 emission },
@@ -166,6 +169,8 @@ __constant__ Sphere spheres[]=
 
 };
 
+
+//Ray and scene intersection
 __device__ inline bool DoesRayIntersectScene(const Ray &inRay, float &ClosestIntersection, int &HitID)
 {
 	int i;
@@ -189,8 +194,7 @@ __device__ float3 GetRadiance(Ray &inRay,unsigned int *seed1,unsigned int *seed2
 	float3 ColourAccumulator = black;
 	float3 mask = white;
 	
-	int LightBounce;
-	//int HitID;
+	int LightBounce;	
 	
 	for (LightBounce = 0; LightBounce < 4; ++LightBounce)		
 	{
@@ -201,35 +205,54 @@ __device__ float3 GetRadiance(Ray &inRay,unsigned int *seed1,unsigned int *seed2
 				return black;
 
 		const Sphere &HitObj=spheres[HitID];
-		float3 HitPoint=inRay.Origin+inRay.Direction*ClosestIntersection;
-		float3 Normal=normalize(HitPoint-HitObj.Position);
-		float3 FrontNormal=dot(Normal,inRay.Direction)<0 ? Normal : Normal*(-1); 
+		if (HitObj.Reflector==SPEC)		
+		{
+			
+			float3 HitPoint=inRay.Origin+inRay.Direction*ClosestIntersection;
+			float3 Normal=normalize(HitPoint-HitObj.Position);
+			float3 FrontNormal=dot(Normal,inRay.Direction)<0 ? Normal : Normal*(-1); 
 
-		ColourAccumulator+=mask*HitObj.Emmisivity*HitObj.Colour;
+			ColourAccumulator+=mask*HitObj.Emmisivity;//*HitObj.Colour;
 
-		float Azimuth = 2 * M_PI * RandGen(seed1, seed2);
-		float Elevation = RandGen(seed1, seed2);
-		float SqrtElev = sqrtf(Elevation); 
-		float3 w = FrontNormal; 
-		float3 u = normalize(cross((fabs(w.x) > 0.1 ? Yaxis : Xaxis), w));
-		float3 v = cross(w,u);		
-		float3 NewDir=normalize(u*cos(Azimuth)*SqrtElev + v*sin(Azimuth)*SqrtElev + w*sqrtf(1 - Elevation));																	
+			float Azimuth = 2 * M_PI * RandGen(seed1, seed2);
+			float Elevation = RandGen(seed1, seed2);
+			float SqrtElev = sqrtf(Elevation); 
+			float3 w = FrontNormal; 
+			float3 u = normalize(cross((fabs(w.x) > 0.1 ? Yaxis : Xaxis), w));
+			float3 v = cross(w,u);		
+			float3 NewDir=normalize(u*cos(Azimuth)*SqrtElev + v*sin(Azimuth)*SqrtElev + w*sqrtf(1 - Elevation));																	
 
-		inRay.Origin=HitPoint + FrontNormal*0.05f;
-		inRay.Direction=NewDir;
-		float3 UpdateMask=2*HitObj.Colour*dot(NewDir,FrontNormal);
-		mask *= UpdateMask; 
-		//*100;
+			inRay.Origin=HitPoint + FrontNormal*0.05f;
+			inRay.Direction=NewDir;
+			float3 UpdateMask=2*HitObj.Colour*dot(inRay.Direction-Normal*2*dot(Normal,inRay.Direction),inRay.Direction);
+			mask *= UpdateMask; 		
+			
+		}
+		else
+		{
+			float3 HitPoint=inRay.Origin+inRay.Direction*ClosestIntersection;
+			float3 Normal=normalize(HitPoint-HitObj.Position);
+			float3 FrontNormal=dot(Normal,inRay.Direction)<0 ? Normal : Normal*(-1); 
+
+			ColourAccumulator+=mask*HitObj.Emmisivity;//*HitObj.Colour;
+
+			float Azimuth = 2 * M_PI * RandGen(seed1, seed2);
+			float Elevation = RandGen(seed1, seed2);
+			float SqrtElev = sqrtf(Elevation); 
+			float3 w = FrontNormal; 
+			float3 u = normalize(cross((fabs(w.x) > 0.1 ? Yaxis : Xaxis), w));
+			float3 v = cross(w,u);		
+			float3 NewDir=normalize(u*cos(Azimuth)*SqrtElev + v*sin(Azimuth)*SqrtElev + w*sqrtf(1 - Elevation));																	
+
+			inRay.Origin=HitPoint + FrontNormal*0.05f;
+			inRay.Direction=NewDir;
+			float3 UpdateMask=2*HitObj.Colour*dot(NewDir,FrontNormal);
+			mask *= UpdateMask; 		
+		}
+		
+		
 		
 	}
-	/*else if (HitObj.Reflector==SPEC)
-		for (LightBounce = 0; LightBounce < 4; ++LightBounce)		
-		{
-			r.d-n*2*n.dot(r.d)	//new direction
-			float3 UpdateMask=HitObj.Colour*(inRay.Direction-dot(Normal*Normal*2,inRay.Direction));
-			mask*=UpdateMask;
-			ColourAccumulator+=mask*HitObj.Emmisivity;//*100;
-		}*/
 		
 		
 	
@@ -251,11 +274,11 @@ __global__ void TracePath2(float3 *RenderedImage)
 	float3 DirOffsetY = normalize(cross(DirOffsetX, CameraRay.Direction)) * FoV;
 	float3 FinalPixCol = black;
 
-	for (int CurrentSample = 0; CurrentSample < NumSamples; CurrentSample++)
+	for (int CurrentSample = 0; CurrentSample < SamplesPerPixel; CurrentSample++)
 	{		
 		float3 DirectionOffset = CameraRay.Direction + DirOffsetX*((0.25 + x) / RenderWidth - 0.5) + DirOffsetY*((0.25 + y) / RenderHeight - 0.5);		
 		Ray temp_ray(CameraRay.Origin + DirectionOffset * 40, normalize(DirectionOffset));		
-		FinalPixCol+=GetRadiance(temp_ray, &seed1, &seed2)*(1.0 / NumSamples); 
+		FinalPixCol+=GetRadiance(temp_ray, &seed1, &seed2)*(1.0 / SamplesPerPixel); 
 	}
 
 	RenderedImage[CurrentPixel]=make_float3(clamp(FinalPixCol.x, 0.0f, 1.0f), clamp(FinalPixCol.y, 0.0f, 1.0f), clamp(FinalPixCol.z, 0.0f, 1.0f));
@@ -289,5 +312,6 @@ int main(int argc, char const *argv[])
 	printf("Saved image\n");
 
 	delete[] h_RenderedImage;
+	
 	return 0;
 }
