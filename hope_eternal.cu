@@ -279,8 +279,8 @@ int main(int argc, char const *argv[])
 	char* endPtr;
 	
 	int NumThreadsX=strtol(argv[1],&endPtr,10);
-	int NumThreadsY=NumThreadsX;
-	int SamplesPerPixel=strtol(argv[2],&endPtr,10);
+	int NumThreadsY=strtol(argv[2],&endPtr,10);
+	int SamplesPerPixel=strtol(argv[3],&endPtr,10);
 	float3* h_RenderedImage = new float3[RenderWidth*RenderHeight*sizeof(float3)]; 
 	float3* d_RenderedImage;	
 
@@ -295,7 +295,7 @@ int main(int argc, char const *argv[])
 	cudaFree(d_RenderedImage);  
 	printf("Finished and freed\n");
 
-	FILE *f = fopen(argv[3], "w");          
+	FILE *f = fopen(argv[4], "w");          
 	fprintf(f, "P3\n%d %d\n%d\n", RenderWidth, RenderHeight, 255);
 
 	for (PixPtr = 0; PixPtr < RenderWidth*RenderHeight; PixPtr++)  
