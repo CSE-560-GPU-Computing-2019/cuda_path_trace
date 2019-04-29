@@ -144,9 +144,9 @@ __constant__ Sphere spheres[]=
 	// small sphere 1
 	{ 16.5f,
 		{ 27.0f, 16.5f, 47.0f },
-		{ 0.0f, 0.4f, 0.2f },
-		{ 0.083f, 0.19f, 0.032f},
-		DIFF
+		{ 0.0f, 0.0f, 0.0f  },
+		{0.999f, 0.999f, 0.999f},
+		REFR
 	}, 
 	// small sphere 2
 	{ 16.5f,
@@ -158,7 +158,7 @@ __constant__ Sphere spheres[]=
 	// Light
 	{ 600.0f,
 		{ 50.0f, 681.6f - 0.27f, 81.6f },
-		{ 12.0f, 12.0f, 12.0f },
+		{ 6.0f, 6.0f, 6.0f },
 		{ 0.9f, 0.2f, 0.086f },
 		DIFF 
 	}  
@@ -236,8 +236,39 @@ __device__ float3 GetRadiance(Ray &inRay,unsigned int *seed1,unsigned int *seed2
 		}
 		else
 		{
+			bool enter= dot(Normal,FrontNormal) >0;
+			float ref_air=1.0f;
+			float ref_glass=1.5f;
+			float ior= enter ? ref_air/ref_glass: ref_glass/ref_air;
+			float des=dot(inRay.Direction, FrontNormal);
+			float cos2t= 1.0f- ior*ior*(1.0f-des*des);
+			if (cos2t<0.0f)
+			{
+				inRay.Direction= inRay.Direction-2.0f*Normal*dot(Normal, inRay.Direction);
+				inRay.Origin=HitPoint + FrontNormal*0.01f;
+			}
+			else{
+				float3 T_dir = normalize(inRay.Direction*ior-Normal*((enter?1:-1)* (des*ior+ sqrtf(cos2t))));
+				float c= 1.0f - (enter? -des:dot(T_dir,Normal));
+				float R0= (ref_glass- ref_air)*(ref_glass- ref_air)/(ref_glass+ ref_air)*(ref_glass+ ref_air);
+				float Re = R0 + (1.f- R0)*c*c*c*c*c;
+				float Tr=1-Re;
+				float P= 0.25+ 0.5f*Re;
+				float RP=Re/P;
+				float TP=Tr / (1.0f-P);
+				if (RandGen(seed1, seed2)>0.25)
+				{
+					UpdateMask *=RP;
+					inRay.Direction=inRay.Direction-2.0f*Normal*dot(Normal, inRay.Direction);
+					inRay.Origin=HitPoint + FrontNormal*0.02f;
+				}
+				else{
+					UpdateMask *=TP;
+					inRay.Direction = T_dir;
+					inRay.Origin=HitPoint + FrontNormal*0.0005f;
+				}
+			}
 			
-			UpdateMask=2*HitObj.Colour*HitObj.Colour*HitObj.Colour*dot(inRay.Direction-2*Normal*dot(FrontNormal,inRay.Direction),inRay.Direction);
 		}
 		
 		mask *= UpdateMask; 		
