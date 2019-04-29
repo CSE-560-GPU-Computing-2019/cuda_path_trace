@@ -146,14 +146,14 @@ __constant__ Sphere spheres[]=
 		{ 27.0f, 16.5f, 47.0f },
 		{ 0.0f, 0.4f, 0.2f },
 		{ 0.083f, 0.19f, 0.032f},
-		REFR
+		DIFF
 	}, 
 	// small sphere 2
 	{ 16.5f,
 		{ 73.0f, 16.5f, 78.0f },
 		{ 0.0f, 0.0f, 0.0f },
-		{ 0.673f, 0.239f, 0.459f },
-		SPEC 
+		{ 0.999f, 0.999f, 0.999f },
+		SPEC
 	}, 
 	// Light
 	{ 600.0f,
@@ -208,33 +208,35 @@ __device__ float3 GetRadiance(Ray &inRay,unsigned int *seed1,unsigned int *seed2
 		
 		ColourAccumulator+=mask*HitObj.Emmisivity;
 		
-		float Azimuth = 2 * M_PI * RandGen(seed1, seed2);
-		float Elevation = RandGen(seed1, seed2);
-		float SqrtElev = sqrtf(Elevation); 
-
-		float3 u = normalize(cross((fabs(FrontNormal.x) > 0.1 ? Yaxis : Xaxis), FrontNormal));
-		float3 v = cross(FrontNormal,u);		
-		float3 NewDir=normalize(u*cos(Azimuth)*SqrtElev + v*sin(Azimuth)*SqrtElev + FrontNormal*sqrtf(1 - Elevation));																	
-
-		inRay.Origin=HitPoint + FrontNormal*0.05f;
-		inRay.Direction=NewDir;
+		
 		float3 UpdateMask;
 		if (HitObj.Reflector==SPEC)		
 		{
-			
-			UpdateMask=2*HitObj.Colour*dot(inRay.Direction-Normal*2*dot(Normal,inRay.Direction),inRay.Direction);
 
+			float3 NewDir=inRay.Direction - 2.0f*Normal*dot(Normal,inRay.Direction);
 			
-			
+			inRay.Origin=HitPoint + FrontNormal*0.01f;
+			inRay.Direction=NewDir;
+			UpdateMask=2*HitObj.Colour;
 		}
 		else if(HitObj.Reflector==DIFF)
 		{
-			
-			UpdateMask=2*HitObj.Colour*dot(NewDir,FrontNormal);
+			float Azimuth = 2 * M_PI * RandGen(seed1, seed2);
+			float Elevation = RandGen(seed1, seed2);
+			float SqrtElev = sqrtf(Elevation); 
+
+			float3 u = normalize(cross((fabs(FrontNormal.x) > 0.1 ? Yaxis : Xaxis), FrontNormal));
+			float3 v = cross(FrontNormal,u);		
+			float3 NewDir=normalize(u*cos(Azimuth)*SqrtElev + v*sin(Azimuth)*SqrtElev + FrontNormal*sqrtf(1 - Elevation));																	
+
+			inRay.Origin=HitPoint + FrontNormal*0.05f;
+			inRay.Direction=NewDir;
+			UpdateMask=2*HitObj.Colour;
 			
 		}
 		else
 		{
+			
 			UpdateMask=2*HitObj.Colour*HitObj.Colour*HitObj.Colour*dot(inRay.Direction-2*Normal*dot(FrontNormal,inRay.Direction),inRay.Direction);
 		}
 		
@@ -242,7 +244,7 @@ __device__ float3 GetRadiance(Ray &inRay,unsigned int *seed1,unsigned int *seed2
 		
 		
 	}
-		
+	
 		
 	
 
@@ -266,7 +268,7 @@ __global__ void TracePath2(float3 *RenderedImage,const int SamplesPerPixel)
 	for (int CurrentSample = 0; CurrentSample < SamplesPerPixel; CurrentSample++)
 	{		
 		float3 DirectionOffset = CameraRay.Direction + DirOffsetX*((0.25 + x) / RenderWidth - 0.5) + DirOffsetY*((0.25 + y) / RenderHeight - 0.5);		
-		Ray temp_ray(CameraRay.Origin + DirectionOffset * 40, normalize(DirectionOffset));		
+		Ray temp_ray(CameraRay.Origin + DirectionOffset * 140, normalize(DirectionOffset));		
 		FinalPixCol+=GetRadiance(temp_ray, &seed1, &seed2)*(1.0 / SamplesPerPixel); 
 	}
 
@@ -279,8 +281,8 @@ int main(int argc, char const *argv[])
 	char* endPtr;
 	
 	int NumThreadsX=strtol(argv[1],&endPtr,10);
-	int NumThreadsY=strtol(argv[2],&endPtr,10);
-	int SamplesPerPixel=strtol(argv[3],&endPtr,10);
+	int NumThreadsY=NumThreadsX;
+	int SamplesPerPixel=strtol(argv[2],&endPtr,10);
 	float3* h_RenderedImage = new float3[RenderWidth*RenderHeight*sizeof(float3)]; 
 	float3* d_RenderedImage;	
 
@@ -295,7 +297,7 @@ int main(int argc, char const *argv[])
 	cudaFree(d_RenderedImage);  
 	printf("Finished and freed\n");
 
-	FILE *f = fopen(argv[4], "w");          
+	FILE *f = fopen(argv[3], "w");          
 	fprintf(f, "P3\n%d %d\n%d\n", RenderWidth, RenderHeight, 255);
 
 	for (PixPtr = 0; PixPtr < RenderWidth*RenderHeight; PixPtr++)  
